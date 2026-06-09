@@ -192,6 +192,16 @@
         
         button.btn-pdf:hover { background-color: #c53030; }
 
+        /* Nova classe inserida para o botão de download de planilha modelo */
+        button.btn-modelo {
+            background-color: var(--success);
+            color: white;
+            margin-top: 15px;
+            font-size: 0.95rem;
+            box-shadow: var(--shadow-sm);
+        }
+        button.btn-modelo:hover { background-color: #2f855a; }
+
         .dashboard-header {
             display: flex;
             justify-content: space-between;
@@ -262,6 +272,9 @@
         }
 
         tr:hover { background-color: #f8fafc; }
+        
+        /* Previne o html2pdf de cortar o registro do aluno pela metade entre páginas */
+        tr { page-break-inside: avoid; }
 
         .formula-box {
             font-family: 'Courier New', Courier, monospace;
@@ -279,6 +292,16 @@
         .status-excedente { color: #b7791f; font-weight: 700; background: #feebc8; padding: 4px 10px; border-radius: 12px; display: inline-block; font-size: 0.85rem; white-space: nowrap;}
         .status-reprovado { color: var(--danger); font-weight: 700; background: #fed7d7; padding: 4px 10px; border-radius: 12px; display: inline-block; font-size: 0.85rem; white-space: nowrap;}
         .status-aguardando { color: var(--text-muted); font-weight: 700; background: #e2e8f0; padding: 4px 10px; border-radius: 12px; display: inline-block; font-size: 0.85rem; white-space: nowrap;}
+
+        /* Classe para exibir o status de desempate sem poluir visualmente a tabela original */
+        .obs-desempate {
+            display: block;
+            margin-top: 6px;
+            font-size: 0.75rem;
+            color: #4a5568;
+            font-style: italic;
+            font-weight: 500;
+        }
 
         /* Toast Notifications */
         #toast-container {
@@ -342,9 +365,10 @@
             <div class="card" style="margin-bottom: 25px;">
                 <div class="card-header">📊 Imputação via Planilha XLSX</div>
                 <div class="form-group">
-                    <label for="arquivoXlsx">Selecione a Planilha (.xlsx):</label>
-                    <input type="file" id="arquivoXlsx" accept=".xlsx" onchange="importarXlsx(this)">
+                    <label for="arquivoXlsx">Selecione a Planilha (.xlsx, .xls):</label>
+                    <input type="file" id="arquivoXlsx" accept=".xlsx, .xls" onchange="importarXlsx(this)">
                 </div>
+                <button type="button" class="btn-modelo" onclick="baixarPlanilhaModelo()">⬇️ Baixar Planilha Modelo</button>
             </div>
 
             <div class="card">
@@ -398,6 +422,16 @@
                     <label for="notaAluno">Nota Geral Alcançada no Vestibular:</label>
                     <input type="number" id="notaAluno" step="0.01" placeholder="Nota no exame selecionado">
                 </div>
+
+                <div class="form-group">
+                    <label for="notaRedacao">Nota da Redação (Critério Desempate 1):</label>
+                    <input type="number" id="notaRedacao" step="0.01" placeholder="Ex: 920.50">
+                </div>
+                
+                <div class="form-group">
+                    <label for="idadeAluno">Idade em Anos (Critério Desempate 2):</label>
+                    <input type="number" id="idadeAluno" step="1" min="0" placeholder="Ex: 25">
+                </div>
             </div>
         </div>
 
@@ -430,7 +464,7 @@
                                 <th>Candidato</th>
                                 <th>Origem</th>
                                 <th>Nota Bruta</th>
-                                <th>Cálculo Estrutural (IDP)</th>
+                                <th>Redação</th> <th>Idade</th> <th>Cálculo Estrutural (IDP)</th>
                                 <th>IDP Final</th>
                                 <th>Situação</th>
                             </tr>
@@ -451,6 +485,7 @@
     <script>
         // ESTADO DA APLICAÇÃO (Arquitetura MVC base - Model)
         let candidatos = [];
+        let ordemGlobal = 0; // Variável para garantir desempate por ordem original (Adição)
 
         // LISTENERS DE EVENTOS UI
         document.getElementById('nomeCurso').addEventListener('input', (e) => {
@@ -481,10 +516,40 @@
             }
         }
 
+        // Função para baixar a planilha modelo sem depender do backend (Adição)
+        function baixarPlanilhaModelo() {
+            const dadosModelo = [
+                {
+                    "NOME": "Exemplo Silva da Costa",
+                    "NOTA NA REDAÇÃO": 920.5,
+                    "IDADE": 25,
+                    "FORMA DE INGRESSO ORIGINAL (PAES/ENEM)": "ENEM",
+                    "ANO": 2023,
+                    "NOTA DE CORTE (no ano)": 600,
+                    "NOTA MÁXIMA (no ano)": 1000,
+                    "NOTA OBTIDA (no ano)": 845.32
+                }
+            ];
+            const ws = XLSX.utils.json_to_sheet(dadosModelo);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Modelo_Importacao");
+            XLSX.writeFile(wb, "Modelo_Transferencia_UEMA.xlsx");
+            showToast("Planilha modelo baixada com sucesso!", "success");
+        }
+
         // Função responsável por processar e parsear os dados importados do arquivo Excel
         function importarXlsx(input) {
             if (!input.files || !input.files[0]) return;
             const arquivo = input.files[0];
+            
+            // Validação explícita para evitar o formato CSV quebrando as regras definidas
+            const extensao = arquivo.name.toLowerCase();
+            if (extensao.endsWith('.csv')) {
+                showToast("Erro: Formato CSV não suportado. Por favor, importe arquivos .xls ou .xlsx.");
+                input.value = '';
+                return;
+            }
+
             const leitor = new FileReader();
 
             leitor.onload = function(e) {
@@ -503,6 +568,7 @@
                     }
 
                     let importadosComSucesso = 0;
+                    let ignorados = 0;
 
                     linhas.forEach((linha, indice) => {
                         // Mapeamento exato das colunas requisitadas pelo edital
@@ -513,13 +579,21 @@
                         let corteStr = (linha['NOTA DE CORTE (no ano)'] || '0').toString().trim();
                         let maxStr = (linha['NOTA MÁXIMA (no ano)'] || '1').toString().trim();
                         let obtidaStr = (linha['NOTA OBTIDA (no ano)'] || '').toString().trim();
+                        
+                        // Novos campos
+                        let redacaoStr = (linha['NOTA NA REDAÇÃO'] || '').toString().trim();
+                        let idadeStr = (linha['IDADE'] || '').toString().trim();
 
                         // Normalização de decimais com tratamento de string substituindo vírgula por ponto
                         const corteExame = parseFloat(corteStr.replace(',', '.'));
                         const maxExame = parseFloat(maxStr.replace(',', '.'));
                         const notaBruta = parseFloat(obtidaStr.replace(',', '.'));
+                        const notaRedacao = parseFloat(redacaoStr.replace(',', '.'));
+                        const idade = parseInt(idadeStr, 10);
 
-                        if (!nome || !ano || isNaN(notaBruta)) {
+                        // Valida obrigatoriedade rigorosa de TODOS os campos (incluindo os novos)
+                        if (!nome || !ano || isNaN(notaBruta) || isNaN(notaRedacao) || isNaN(idade)) {
+                            ignorados++;
                             return; // Ignora registros inconsistentes ou vazios
                         }
 
@@ -543,15 +617,24 @@
                             nome: nome,
                             exame: exame,
                             notaBruta: notaBruta,
+                            redacao: notaRedacao,
+                            idade: idade,
                             formula: formulaAplicada,
                             idp: parseFloat(idp.toFixed(2)),
                             status: statusInicial,
-                            ano: ano
+                            ano: ano,
+                            ordemOriginal: ordemGlobal++,
+                            obsDesempate: ''
                         });
                         importadosComSucesso++;
                     });
 
-                    showToast(`${importadosComSucesso} candidatos carregados com sucesso!`, 'success');
+                    if (ignorados > 0) {
+                        showToast(`${importadosComSucesso} carregados. ${ignorados} linhas ignoradas por dados faltantes.`, 'success');
+                    } else {
+                        showToast(`${importadosComSucesso} candidatos carregados com sucesso!`, 'success');
+                    }
+                    
                     atualizarTabela();
                     input.value = ''; // Reseta o input de arquivo
                 } catch (erro) {
@@ -568,6 +651,8 @@
             const exame = document.querySelector('input[name="tipoExame"]:checked').value;
             const notaBruta = parseFloat(document.getElementById('notaAluno').value);
             const ano = document.getElementById('anoVestibular').value.trim();
+            const notaRedacao = parseFloat(document.getElementById('notaRedacao').value);
+            const idade = parseInt(document.getElementById('idadeAluno').value, 10);
             
             // Captura parâmetros específicos do edital
             const cortePaes = parseFloat(document.getElementById('cortePaes').value) || 0;
@@ -576,16 +661,23 @@
             const maxEnem = parseFloat(document.getElementById('maxEnem').value) || 1;
 
             if (!nome || !ano) {
-                showToast("Erro: O nome do candidato e o ano do vestibular são obrigatórios antes de incluir.");
+                showToast("Erro: O nome do candidato e o ano do vestibular são obrigatórios.");
                 return;
             }
 
-            if (isNaN(notaBruta)) {
-                showToast("Erro: A nota geral alcançada pelo candidato é obrigatória.");
+            if (isNaN(notaBruta) || notaBruta < 0) {
+                showToast("Erro: A nota geral alcançada pelo candidato é obrigatória e válida.");
                 return;
             }
-            if (notaBruta < 0) {
-                showToast("Erro: A nota não pode ser negativa.");
+
+            // Validação dos novos campos inseridos
+            if (isNaN(notaRedacao) || notaRedacao < 0) {
+                showToast("Erro: A Nota da Redação é obrigatória.");
+                return;
+            }
+
+            if (isNaN(idade) || idade < 0) {
+                showToast("Erro: A Idade do candidato é obrigatória e deve ser um número inteiro.");
                 return;
             }
 
@@ -612,10 +704,14 @@
                 nome: nome,
                 exame: exame,
                 notaBruta: notaBruta,
+                redacao: notaRedacao,
+                idade: idade,
                 formula: formulaAplicada,
                 idp: parseFloat(idp.toFixed(2)),
                 status: statusInicial,
-                ano: ano
+                ano: ano,
+                ordemOriginal: ordemGlobal++, // Captura a ordem original para o desempate final
+                obsDesempate: ''
             });
 
             showToast(`Candidato ${nome} inserido com sucesso.`, 'success');
@@ -624,6 +720,8 @@
             document.getElementById('nomeAluno').value = '';
             document.getElementById('notaAluno').value = '';
             document.getElementById('anoVestibular').value = '';
+            document.getElementById('notaRedacao').value = '';
+            document.getElementById('idadeAluno').value = '';
             document.getElementById('nomeAluno').focus();
 
             atualizarTabela();
@@ -645,14 +743,20 @@
                 else if(cand.status === 'Excedente') statusClass = 'status-excedente';
                 else if(cand.status.includes('Eliminado')) statusClass = 'status-reprovado';
 
+                // Gera a label descritiva dos critérios aplicados no desempate
+                let boxDesempate = cand.obsDesempate ? `<span class="obs-desempate">${cand.obsDesempate}</span>` : '';
+
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
                     <td><strong>${cand.nome}</strong> <small style="color: var(--text-muted); display:block;">Ano: ${cand.ano}</small></td>
                     <td>${cand.exame}</td>
                     <td>${cand.notaBruta}</td>
-                    <td><span class="formula-box">${cand.formula}</span></td>
+                    <td>${cand.redacao}</td> <td>${cand.idade}</td> <td><span class="formula-box">${cand.formula}</span></td>
                     <td><strong>${cand.idp}</strong></td>
-                    <td><span class="${statusClass}">${cand.status}</span></td>
+                    <td>
+                        <span class="${statusClass}">${cand.status}</span>
+                        ${boxDesempate}
+                    </td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -666,14 +770,45 @@
 
             const vagas = parseInt(document.getElementById('vagasDisponiveis').value) || 0;
 
-            // Ordena todos por IDP (do maior para o menor)
-            candidatos.sort((a, b) => b.idp - a.idp);
+            // Limpa as tags de desempate anteriores
+            candidatos.forEach(cand => cand.obsDesempate = '');
+
+            // Motor de Ranqueamento com Critérios de Desempate (IDP > Redação > Idade > Ordem Original)
+            candidatos.sort((a, b) => {
+                if (b.idp !== a.idp) return b.idp - a.idp;
+                if (b.redacao !== a.redacao) return b.redacao - a.redacao;
+                if (b.idade !== a.idade) return b.idade - a.idade;
+                return a.ordemOriginal - b.ordemOriginal;
+            });
+
+            // Motor de Varredura para Rotulagem de Desempate - Exibe o motivo na View e no PDF
+            for (let i = 1; i < candidatos.length; i++) {
+                let atual = candidatos[i];
+                let anterior = candidatos[i-1];
+
+                if (atual.idp === anterior.idp) {
+                    let logicaResolucao = "";
+                    
+                    if (anterior.redacao > atual.redacao) {
+                        logicaResolucao = "Empate no IDP resolvido pela Nota da Redação.";
+                    } else if (anterior.redacao === atual.redacao && anterior.idade > atual.idade) {
+                        logicaResolucao = "Empate no IDP e Redação resolvido pela Idade.";
+                    } else {
+                        logicaResolucao = "Empate mantido e resolvido por ordem de importação original.";
+                    }
+
+                    atual.obsDesempate = logicaResolucao;
+                    // Aplica ao concorrente superior caso ele não possua o carimbo do fator determinante
+                    if (!anterior.obsDesempate) {
+                        anterior.obsDesempate = logicaResolucao;
+                    }
+                }
+            }
 
             let vagasPreenchidas = 0;
 
-            // Motor de Ranqueamento 
+            // Processamento do Status
             candidatos.forEach(cand => {
-                // Pula candidatos que já foram eliminados pelo corte do seu próprio exame
                 if (cand.status === 'Eliminado (Corte Origem)') return;
 
                 if (vagasPreenchidas < vagas) {
@@ -715,7 +850,10 @@
                     scrollX: 0, 
                     scrollY: 0 
                 },
-                jsPDF:        { unit: 'mm', format: 'a4', orientation: 'landscape' }
+                // Modificado para A3 para suportar as novas colunas adicionadas e o texto do desempate sem espremer/cortar
+                jsPDF:        { unit: 'mm', format: 'a3', orientation: 'landscape' },
+                // Configuração inserida para bloquear o corte vertical na quebra de página de pdfs com múltiplos alunos
+                pagebreak:    { mode: ['css', 'legacy'] } 
             };
 
             html2pdf().set(opt).from(elemento).save().then(() => {
